@@ -1,3 +1,17 @@
+/*  Copyright (C) 2018 Shrinath Nimare
+    This file is part of IRPatternRecorder
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
 #define F_CPU 16000000UL
 #include </usr/avr/include/avr/io.h>
 #include </usr/avr/include/util/delay.h>
@@ -10,89 +24,96 @@ typedef unsigned char BYTE;
 WORD memory[SAMPLES],temp;
 BYTE counter = 0, tempcounter = 0;
 
+//interupt setup
 void inter()
 {
-    MCUCR |= (1 << ISC10);
-    GICR |= (1 << INT0);
+    MCUCR |= (1 << ISC10); //any logical change will trigger INT0
+    GICR |= (1 << INT0); //enabling INT0
     PORTD |= (1 << PD2); //enabling the PD2 pin pull up resistor
 }
 
+//uart interrupt setup
 void uart_init()
 {
-    UCSRB |= (1 << TXEN) | (1 << RXEN) | (1 << RXCIE);
-    UCSRC |= (1 << URSEL) | (1 << UCSZ0) | (1 << UCSZ1);
-    UBRRL = 103;
+    UCSRB |= (1 << TXEN) | (1 << RXEN) | (1 << RXCIE); //enabling TX, RX and RX interrupt
+    UCSRC |= (1 << URSEL) | (1 << UCSZ0) | (1 << UCSZ1); //8 data bits
+    UBRRL = 103; //setting baud rate to 9600, this can be changed for higher or lower
 }
 
+//routine to send data through uart
 void uart_send(BYTE data)
 {
-    while(UCSRA & (1 << UDRE) == 0);
-    UDR = data;
+    while((UCSRA & (1 << UDRE)) == 0){}; //while the UDR is not empty, loop this
+    UDR = data; //write data out
 }
 
+//INT0 service routine
 ISR(INT0_vect)
 {
-    memory[counter++] = TCNT1;
-    TCNT1 = 0;
-    if(~PIND & (1 << PD2))
+    memory[counter++] = TCNT1; //saving to memory, incrementing counter after
+    TCNT1 = 0; //reseting timer
+    if(~PIND & (1 << PD2)) //fetching the status of the pin, and storing it in the MSB of memory
     {
-	memory[counter-1] |= 1 << 15;
+	memory[counter-1] |= 1 << 15; //counter-1 because we incremented the counter, remember?
     }
-    if(counter > SAMPLES)
+    if(counter > SAMPLES) //if the sampling is done, turn on the status led, aka PB1
     {
-	GICR &= ~(1 << INT0);
+	GICR &= ~(1 << INT0); //we turn off the INT0 (this) interrupt too
 	PORTB = 0b11;
     }
 }
 
+//RX complete service routine
 ISR(USART_RXC_vect)
 {
+    //test message
     uart_send('T');
     uart_send('e');
     uart_send('s');
     uart_send('t');
-    for(tempcounter = 0; tempcounter < SAMPLES;tempcounter++)
+    uart_send('\n');
+    for(tempcounter = 0; tempcounter < SAMPLES;tempcounter++) //loop to print all the data out of uart. tempcounter is used so that even if not all SAMPLES are taken, the data can still be dumped
     {
-	temp = memory[tempcounter];
-	if(temp & (1 << 15))
+	temp = memory[tempcounter]; //setting temp as memory
+	if(temp & (1 << 15)) //printing sign
 	    uart_send('+');
 	else
 	    uart_send('-');
-	temp &= ~(1 << 15);
-	//binary
+	temp &= ~(1 << 15); //clearing the MSB, which contains the sign data
+	//binary format
 	/*
 	uart_send((temp >> 8) & 0xff);
 	uart_send(temp & 0xff);
 	*/
-	//ASCII coded
+	//ASCII format, sending the data as A
 	uart_send(48 + (temp / 10000) % 10);
 	uart_send(48 + (temp / 1000) % 10);
 	uart_send(48 + (temp / 100) % 10);
 	uart_send(48 + (temp / 10) % 10);
 	uart_send(48 + (temp % 10));
-	uart_send('\t');
+	uart_send('\n'); //newline
     }
-
+    temp = UDR; //reading UDR because the datasheet states that in the ISR for RXC, UDR has to be read at least once to avoid an interrupt loop
 }
 
 void main()
 {
-    cli();
+    cli(); //disabling interrupts before the starup process
     //blinky to show booting up
-    DDRB = 0b11;
-    PORTB = 1;
-    _delay_ms(1000);
-    PORTB = 0;
-    _delay_ms(1000);
-    PORTB = 1;
-    TCCR1B = (1 << CS10);//timer init, starting with F_CPU/8
-    uart_init();
-    for(counter = 0; counter < SAMPLES; counter++)
+    DDRB = 0b11; //setting PB0 and PB1 as output
+    PORTB = 1; //PB0 turns on
+    _delay_ms(1000); //delay 1 sec
+    PORTB = 0; //PB0 turns off
+    _delay_ms(1000); //delay 1 sec
+    PORTB = 1; //PB0 turns on again
+    TCCR1B = (1 << CS10); //timer init, ticking at F_CPU, this can be changed
+    uart_init(); //uart setup
+    for(counter = 0; counter < SAMPLES; counter++) //setting all memory as 0
 	memory[counter] = 0;
-    counter = 0;
+    counter = 0; //setting counter back to 0
     inter(); //setup interrupts
-    sei();
-    while(1)
+    sei(); //enabling interrupts
+    while(1) //forever loop
     {
     }
 }
